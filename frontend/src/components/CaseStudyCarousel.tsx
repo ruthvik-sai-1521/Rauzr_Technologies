@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { gsap } from "gsap";
+import WorkflowPreview, { type ScreenKey } from "./WorkflowPreview";
 
-const CASES = [
+const CASES: { title: string; detail: string; screen: ScreenKey }[] = [
   { title: "Submission intake", detail: "Standardize incoming dossiers before review.", screen: "submission-intake" },
   { title: "Batch release audit", detail: "Check yield, impurity, and deviation data.", screen: "batch-release" },
   { title: "CoA / KSM matching", detail: "Confirm every starting material has a matching CoA.", screen: "coa-matching" },
@@ -15,7 +16,7 @@ export default function CaseStudyCarousel() {
 
   useEffect(() => {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) return;
+    if (reduced || !panel.current) return;
     gsap.fromTo(panel.current, { opacity: 0.35, y: 10 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" });
     const activeTab = tabs.current?.children[active] as HTMLElement | undefined;
     if (activeTab) gsap.to(activeTab, { color: "#F6F4EF", duration: 0.25 });
@@ -47,7 +48,7 @@ export default function CaseStudyCarousel() {
             </div>
           </div>
           <div ref={panel} role="tabpanel" aria-label={current.title} className="overflow-hidden rounded-sm border border-paper/15 bg-ink-700 p-3 shadow-2xl">
-            <img src={`/media/product/${current.screen}.png`} alt={`${current.title} workflow in the Rauzr Technologies workspace`} loading="lazy" className="aspect-[16/10] w-full rounded-sm object-cover object-top" />
+            <WorkflowPreview screen={current.screen} />
             <div className="flex items-center justify-between gap-4 border-t border-paper/10 px-2 pb-1 pt-4">
               <div>
                 <p className="font-mono text-xs text-teal-light">workspace / pipeline run</p>

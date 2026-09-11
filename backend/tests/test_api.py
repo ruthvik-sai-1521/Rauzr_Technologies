@@ -52,7 +52,7 @@ def test_demo_booking_rejects_invalid_email():
 
 
 def test_register_and_login_flow():
-    email = "founder@rauzr-test.local"
+    email = "founder@rauzr-example.com"
     resp = client.post(
         "/api/auth/register",
         json={"email": email, "full_name": "Founder", "password": "StrongPassw0rd!"},

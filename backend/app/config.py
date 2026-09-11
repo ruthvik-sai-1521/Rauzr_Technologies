@@ -95,6 +95,32 @@ class Settings(BaseSettings):
         return self.ENV == "production"
 
     @property
+    def is_railway(self) -> bool:
+        """
+        True whenever this process is actually running on Railway,
+        regardless of whether the ENV variable was ever set on the
+        dashboard. Railway injects RAILWAY_ENVIRONMENT_NAME (and several
+        other RAILWAY_* vars) into every deployment automatically -- this
+        does NOT depend on the user configuring anything.
+
+        This exists because of a real bug found in this codebase: the
+        original persistence guard only enforced its check when
+        ENV=production was explicitly set. Nothing on Railway sets ENV for
+        you, so a service deployed without ever touching that variable
+        silently ran with ENV=development, the guard never fired, and the
+        backend booted happily against an ephemeral SQLite file. Every
+        redeploy/restart then wiped every registered user -- which looks
+        exactly like "signup and login don't work on Railway" even though
+        both endpoints are implemented correctly.
+        """
+        import os
+
+        return any(
+            os.environ.get(key)
+            for key in ("RAILWAY_ENVIRONMENT_NAME", "RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID")
+        )
+
+    @property
     def uses_ephemeral_sqlite(self) -> bool:
         """
         True when DATABASE_URL is SQLite and not pointed at the mounted
@@ -112,9 +138,12 @@ def get_settings() -> Settings:
 
 def require_persistent_database(settings: "Settings") -> None:
     """
-    Startup guard against the login-persistence bug regressing. Refuses to
-    boot in production on a non-persistent database; warns loudly anywhere
-    else so the misconfiguration is never silent.
+    Startup guard against the login-persistence bug regressing. Raises on
+    Railway or in any explicit `ENV=production` -- both are contexts where a
+    silent data-loss bug is unacceptable and a loud, obvious deploy failure
+    (visible in Railway's build/deploy logs) is far preferable to a backend
+    that boots "successfully" and then quietly forgets every user on the
+    next restart. Warns everywhere else (e.g. a bare local `uvicorn` run).
     """
     if not settings.uses_ephemeral_sqlite:
         return
@@ -124,10 +153,12 @@ def require_persistent_database(settings: "Settings") -> None:
         f"{settings.DATA_DIR} volume. Every restart/redeploy will silently "
         "erase all registered users, bookings, and pipeline runs "
         "(this was the original login-persistence bug). Attach a Postgres "
-        "database (recommended) or point DATABASE_URL inside a mounted "
-        "volume -- see README: 'Login persistence -- root cause & fix'."
+        "database (recommended: add the Postgres plugin in Railway, which "
+        "injects DATABASE_URL automatically) or point DATABASE_URL inside "
+        "a mounted volume -- see README: 'Login persistence -- root cause "
+        "& fix'."
     )
-    if settings.is_production:
+    if settings.is_production or settings.is_railway:
         raise RuntimeError(message)
     import logging
 

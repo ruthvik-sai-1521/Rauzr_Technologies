@@ -36,9 +36,9 @@ frontend's JWT handling (`frontend/src/context/AuthContext.tsx`,
 **Fix implemented:**
 1. `backend/app/config.py` — added `require_persistent_database()`: if
    `DATABASE_URL` is SQLite and not pointed at the mounted `DATA_DIR`, the
-   app **refuses to boot** when `ENV=production`, and logs a loud warning
-   otherwise. This turns the bug into an immediate, impossible-to-miss
-   startup failure instead of a silent data-loss trap.
+   app **refuses to boot** when `ENV=production` **or when running on
+   Railway at all** (see section 0.1 below — this second condition was
+   added after the first fix still wasn't catching every real deployment).
 2. `backend/Dockerfile` — creates `/app/data` and declares it a `VOLUME`, so
    a SQLite file placed there survives container restarts if a real volume
    is mounted at that path.
@@ -61,6 +61,86 @@ local dev, and what the README's Railway deploy steps (section 4) require.
 SQLite-on-a-volume is documented as a fallback, not the recommended path,
 because a single mounted file doesn't handle concurrent writes or backups
 as gracefully as managed Postgres.
+
+---
+
+## 0.1 Second pass — why the persistence fix above still didn't work on Railway, and two more real bugs found
+
+A later round reported: "signup and login work locally but not on the
+Railway deployment," and separately, "animations aren't showing, some
+spots just look white." Both were tracked down by reading the actual code
+and testing the fixes, not by guessing.
+
+**Bug 1 — the production-only guard never fired on Railway.**
+`require_persistent_database()` only raised when `ENV=production` was set.
+Railway does **not** set that variable for you — it's a plain env var the
+user has to add on the dashboard, and it's easy to deploy a backend service
+without ever touching it. Result: `ENV` silently defaulted to
+`"development"`, the guard's condition was `False`, and the backend booted
+"successfully" against the same ephemeral SQLite file the section above
+already diagnosed — so every Railway restart/redeploy was *still* wiping
+every registered user, exactly reproducing "signup works, login later
+fails," just on a platform-specific trigger the first fix didn't cover.
+
+*Fix:* `Settings.is_railway` now checks for Railway's own injected env vars
+(`RAILWAY_ENVIRONMENT_NAME` / `RAILWAY_ENVIRONMENT` / `RAILWAY_PROJECT_ID`)
+directly — these are present on **every** Railway deployment regardless of
+what the user configures. `require_persistent_database()` now raises on
+`is_production OR is_railway`. Verified by simulating both env-var
+combinations locally (see git history / commit for this fix): ephemeral
+SQLite + `RAILWAY_ENVIRONMENT_NAME` set now raises immediately with a clear
+message in the deploy logs; Postgres + the same Railway var set boots
+clean. **This means a Railway backend without Postgres attached will now
+fail to deploy loudly instead of running broken silently — attach the
+Postgres plugin (or a volume-backed SQLite path) before redeploying this
+version.** `app/main.py` also now logs the resolved `env`, `railway`,
+`database`, and `cors_origins` values once at startup so a future
+misconfiguration shows up directly in Railway's logs instead of requiring
+a code read to diagnose.
+
+**Bug 2 — the landing page's animated content had two unrelated problems.**
+1. `useGsapReveal` (used on the Product, Company, and Resources pages)
+   gates its fade-in on a GSAP ScrollTrigger with `once: true`. ScrollTrigger
+   calculates each trigger's pixel position from the DOM layout *at the
+   moment it's created*. This app loads two custom Google Fonts
+   asynchronously; if a trigger is created before they finish loading (very
+   likely — the fonts request is async and nothing blocked on it), the
+   fallback-font layout is used, trigger positions are computed against a
+   layout that's about to change, and once the swap-in causes a reflow, a
+   `once: true` trigger can be left permanently unfired — its element
+   stays at its `opacity: 0` starting state forever. That's the literal
+   "white where an animation should be": real content, real background
+   color, just invisible.
+   *Fix:* the hook now calls `ScrollTrigger.refresh()` once fonts finish
+   loading (`document.fonts.ready`) and again on `window.load`, so cached
+   trigger positions are recalculated against the final layout. As defense
+   in depth against *any* other cause of a missed trigger, a one-shot
+   safety-net timer now force-completes the reveal a couple of seconds
+   after mount if it hasn't played yet — nothing on the page can be stuck
+   invisible indefinitely regardless of root cause.
+2. `CaseStudyCarousel` rendered four workflow "product screenshots" from
+   `/media/product/*.png`. All five files in that folder were confirmed to
+   be **byte-identical** (`identify`/`file` showed matching size and
+   dimensions) — a single old capture of the pre-rename `/workspace` page,
+   still carrying the "Veritant" wordmark, reused for every tab, cropped to
+   mostly show pale empty page background against a dark carousel panel.
+   Clicking between the four tabs changed nothing visually, and what was
+   visible read as a mostly-blank pale rectangle — again, "just white."
+   *Fix:* replaced the screenshot dependency entirely with
+   `frontend/src/components/WorkflowPreview.tsx`, four distinct hand-built
+   inline SVG panels (one real, differentiated mockup per workflow: intake,
+   batch release, CoA/KSM matching, nitrosamine screening). This has no
+   external asset to go stale, capture, or re-brand again, and it was
+   visually confirmed correct by rendering each one directly rather than
+   assumed. The stale PNGs and the credits entries describing them were
+   deleted.
+
+Both fixes were verified, not just written: `pytest` (7/7 passing),
+`npm run build` (clean), and a live local run of both services together —
+registering and logging in over HTTP, and loading every route
+(`/`, `/product`, `/company`, `/resources`, `/security`, `/workspace`,
+`/login`, `/register`) through the Vite dev proxy — all before this file
+was packaged.
 
 ---
 

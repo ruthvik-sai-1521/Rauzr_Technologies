@@ -4,6 +4,29 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 
 gsap.registerPlugin(ScrollTrigger);
 
+// This runs once per page load, not per hook call. Root cause of the
+// "content stuck invisible" bug: this app loads two custom Google Fonts
+// via a <link> tag. ScrollTrigger calculates every trigger's pixel
+// position from the DOM layout *at the moment it's created*. If that
+// happens before the fonts finish loading (near-certain on a fast
+// connection, since the fonts request is async), the fallback font's
+// layout is used -- often shorter -- and every trigger position below
+// the swap point is calculated wrong. Because each reveal uses
+// `once: true`, a trigger that never gets a chance to re-fire simply
+// never plays, leaving the element at its `opacity: 0` starting state
+// forever. Refreshing after fonts (and after full page load, to catch
+// images) recalculates every registered trigger against the final layout.
+let refreshScheduled = false;
+function scheduleGlobalRefresh() {
+  if (refreshScheduled) return;
+  refreshScheduled = true;
+  const refresh = () => ScrollTrigger.refresh();
+  if ("fonts" in document) {
+    document.fonts.ready.then(refresh).catch(() => {});
+  }
+  window.addEventListener("load", refresh, { once: true });
+}
+
 interface RevealOptions {
   /** Stagger children matching this selector instead of animating the container as one block. */
   childSelector?: string;
@@ -20,6 +43,11 @@ interface RevealOptions {
  * time it scrolls into view. Respects prefers-reduced-motion by setting the
  * final state immediately with no animation, matching the convention
  * established by useCountUp for the rest of this codebase.
+ *
+ * Defense in depth against the font-load timing issue described above: a
+ * one-shot safety-net timer forces the final visible state regardless of
+ * whether ScrollTrigger ever fired, so a mistimed or missed trigger can
+ * never leave real content permanently invisible.
  */
 export function useGsapReveal<T extends HTMLElement>(options: RevealOptions = {}) {
   const ref = useRef<T | null>(null);
@@ -37,8 +65,10 @@ export function useGsapReveal<T extends HTMLElement>(options: RevealOptions = {}
       return;
     }
 
+    scheduleGlobalRefresh();
+
     const ctx = gsap.context(() => {
-      gsap.fromTo(
+      const tween = gsap.fromTo(
         targets,
         { opacity: 0, y },
         {
@@ -54,6 +84,13 @@ export function useGsapReveal<T extends HTMLElement>(options: RevealOptions = {}
           },
         }
       );
+
+      // Safety net: whatever the cause, nothing on this page should be
+      // able to stay invisible past a couple of seconds after mount.
+      const safety = window.setTimeout(() => {
+        if (tween.progress() === 0) tween.progress(1);
+      }, 2500);
+      tween.eventCallback("onComplete", () => window.clearTimeout(safety));
     }, node);
 
     return () => ctx.revert();

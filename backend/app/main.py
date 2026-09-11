@@ -35,6 +35,13 @@ logging.basicConfig(
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(_RequestIdDefaultFilter())
 logger = logging.getLogger("rauzr")
+logger.info(
+    "Startup config: env=%s railway=%s database=%s cors_origins=%s",
+    settings.ENV,
+    settings.is_railway,
+    "postgres" if settings.DATABASE_URL.startswith("postgres") else settings.DATABASE_URL,
+    settings.cors_origin_list,
+)
 
 app = FastAPI(
     title=settings.APP_NAME,
