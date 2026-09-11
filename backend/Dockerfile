@@ -29,7 +29,7 @@ EXPOSE 8000
 # SQLite default, point it here rather than a bare relative path so it lands
 # on the mounted volume instead of the container's throwaway layer.
 RUN mkdir -p /app/data
-VOLUME ["/app/data"]
+
 
 # Runs as a non-root user for defense in depth.
 RUN useradd --create-home appuser && chown -R appuser:appuser /app/data
